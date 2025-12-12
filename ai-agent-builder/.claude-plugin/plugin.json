@@ -1,0 +1,8 @@
+{
+  "name": "ai-agent-builder",
+  "description": "Helps students build modern web apps with a unified tech stack (Next.js, shadcn/ui, Supabase, Claude Agent SDK)",
+  "version": "1.0.0",
+  "author": {
+    "name": "DAIR.AI"
+  }
+}
