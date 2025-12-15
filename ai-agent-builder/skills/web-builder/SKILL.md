@@ -48,7 +48,12 @@ When creating a new project, guide students through these steps:
    npm install @anthropic-ai/claude-agent-sdk
    ```
 
-5. **Additional dependencies:**
+5. **Install Exa for web search (optional):**
+   ```bash
+   npm install exa-js
+   ```
+
+6. **Additional dependencies:**
    ```bash
    npm install zod react-hook-form @hookform/resolvers
    ```
@@ -65,6 +70,9 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
 # Anthropic
 ANTHROPIC_API_KEY=your-api-key
+
+# Exa (for web search - get key at https://exa.ai/)
+EXA_API_KEY=your-exa-api-key
 
 # App
 NEXT_PUBLIC_APP_URL=http://localhost:3000
@@ -311,6 +319,203 @@ for await (const message of query({
 })) {
   // Process messages
 }
+```
+
+### Exa Search Integration
+
+Exa provides neural and keyword search for finding web content, research papers, and articles. It's ideal for AI applications that need to retrieve up-to-date information.
+
+**Setup (`lib/agent/tools.ts`):**
+```typescript
+import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
+import Exa from "exa-js";
+
+// Initialize Exa client
+const getExaClient = () => {
+  const apiKey = process.env.EXA_API_KEY;
+  if (!apiKey) {
+    throw new Error("EXA_API_KEY environment variable is not set");
+  }
+  return new Exa(apiKey);
+};
+
+// Create Exa search tools
+export const exaSearchTools = createSdkMcpServer({
+  name: "exa-search",
+  version: "1.0.0",
+  tools: [
+    // Neural/Keyword Search
+    tool(
+      "search",
+      "Search the web using neural or keyword search. Neural search uses semantic understanding, keyword search matches exact terms.",
+      {
+        query: z.string().describe("Search query. Natural language for neural, operators (AND/OR/quotes) for keyword"),
+        type: z.enum(["neural", "keyword"]).default("neural").describe("Search type"),
+        num_results: z.number().min(1).max(20).default(5).describe("Number of results"),
+        include_domains: z.array(z.string()).optional().describe("Only include these domains"),
+        exclude_domains: z.array(z.string()).optional().describe("Exclude these domains"),
+        start_published_date: z.string().optional().describe("Filter: published after (YYYY-MM-DD)"),
+        end_published_date: z.string().optional().describe("Filter: published before (YYYY-MM-DD)"),
+        use_autoprompt: z.boolean().default(true).describe("Let Exa optimize the query"),
+        include_text: z.boolean().default(false).describe("Include text snippets")
+      },
+      async (args) => {
+        const exa = getExaClient();
+
+        const options: any = {
+          type: args.type,
+          numResults: args.num_results,
+          useAutoprompt: args.use_autoprompt
+        };
+
+        if (args.include_domains?.length) options.includeDomains = args.include_domains;
+        if (args.exclude_domains?.length) options.excludeDomains = args.exclude_domains;
+        if (args.start_published_date) options.startPublishedDate = args.start_published_date;
+        if (args.end_published_date) options.endPublishedDate = args.end_published_date;
+        if (args.include_text) options.contents = { text: { maxCharacters: 1000 } };
+
+        const results = await exa.searchAndContents(args.query, options);
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              total: results.results.length,
+              results: results.results.map((r: any) => ({
+                title: r.title,
+                url: r.url,
+                author: r.author || "Unknown",
+                published_date: r.publishedDate || "Unknown",
+                text: r.text || null
+              }))
+            }, null, 2)
+          }]
+        };
+      }
+    ),
+
+    // Get full content from URLs
+    tool(
+      "get_contents",
+      "Get full content from specific URLs or search result IDs",
+      {
+        ids: z.array(z.string()).min(1).max(10).describe("URLs or result IDs to fetch"),
+        text_length_words: z.number().min(100).max(2000).default(500).describe("Words to retrieve per document")
+      },
+      async (args) => {
+        const exa = getExaClient();
+
+        const contents = await exa.getContents(args.ids, {
+          text: { maxCharacters: args.text_length_words * 5 }
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              documents: contents.results.map((doc: any) => ({
+                url: doc.url,
+                title: doc.title,
+                author: doc.author || "Unknown",
+                text: doc.text
+              }))
+            }, null, 2)
+          }]
+        };
+      }
+    ),
+
+    // Find similar content
+    tool(
+      "find_similar",
+      "Find content similar to a given URL",
+      {
+        url: z.string().url().describe("URL to find similar content for"),
+        num_results: z.number().min(1).max(20).default(5).describe("Number of results"),
+        exclude_source_domain: z.boolean().default(false).describe("Exclude results from same domain")
+      },
+      async (args) => {
+        const exa = getExaClient();
+
+        const results = await exa.findSimilar(args.url, {
+          numResults: args.num_results,
+          excludeSourceDomain: args.exclude_source_domain
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              source_url: args.url,
+              similar: results.results.map((r: any) => ({
+                title: r.title,
+                url: r.url,
+                author: r.author || "Unknown"
+              }))
+            }, null, 2)
+          }]
+        };
+      }
+    )
+  ]
+});
+```
+
+**Using Exa in a Query:**
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { exaSearchTools } from "@/lib/agent/tools";
+
+for await (const message of query({
+  prompt: "Find recent papers on transformer architectures",
+  options: {
+    mcpServers: {
+      "exa-search": exaSearchTools
+    },
+    allowedTools: [
+      "mcp__exa-search__search",
+      "mcp__exa-search__get_contents",
+      "mcp__exa-search__find_similar"
+    ]
+  }
+})) {
+  console.log(message);
+}
+```
+
+**Exa Search Best Practices:**
+
+| Use Case | Search Type | Tips |
+|----------|-------------|------|
+| Research papers | `neural` | Use `autoprompt: true`, filter with `include_domains: ["arxiv.org"]` |
+| Exact term matching | `keyword` | Use operators: `"exact phrase"`, `term1 AND term2` |
+| Recent content | `neural` | Set `start_published_date` to filter by date |
+| Deep dive | `get_contents` | Fetch full text after initial search |
+| Related work | `find_similar` | Expand research from a key paper |
+
+**Example: Research Agent with Exa:**
+```typescript
+// lib/agent/config.ts
+import { exaSearchTools } from "./tools";
+
+export const researchAgentConfig = {
+  model: "claude-sonnet-4-5",
+  systemPrompt: `You are a research assistant with access to Exa search.
+    Use neural search for semantic queries and get_contents to read full articles.
+    Always cite sources with URLs.`,
+  mcpServers: {
+    "exa-search": exaSearchTools
+  },
+  allowedTools: [
+    "mcp__exa-search__search",
+    "mcp__exa-search__get_contents",
+    "mcp__exa-search__find_similar",
+    "Read",
+    "Write"
+  ],
+  permissionMode: "bypassPermissions"
+};
 ```
 
 ### Permission Modes
