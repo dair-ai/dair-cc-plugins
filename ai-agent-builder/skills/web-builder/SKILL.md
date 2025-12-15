@@ -1,3 +1,9 @@
+---
+name: ai-agent-builder
+description: Build modern AI-powered web applications using the Claude Agent SDK. Use this skill when creating full-stack apps with Next.js, Supabase, and AI agent capabilities including custom tools, Exa search integration, and agentic workflows.
+license: MIT
+---
+
 # Web Builder Skill
 
 Use this skill when helping students build modern web applications with AI capabilities. This skill provides guidance for a unified tech stack optimized for building production-ready applications.
