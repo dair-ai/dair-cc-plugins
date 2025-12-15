@@ -7,9 +7,8 @@
   "plugins": [
     {
       "name": "ai-agent-builder",
-      "source": "./ai-agent-builder",
+      "source": "./plugins/ai-agent-builder",
       "description": "Helps students build modern web apps with a unified tech stack (Next.js, shadcn/ui, Supabase, Claude Agent SDK)",
-      "version": "1.0.0",
       "author": {
         "name": "DAIR.AI"
       }
