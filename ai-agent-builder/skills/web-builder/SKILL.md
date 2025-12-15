@@ -14,7 +14,7 @@ When building web applications with this skill, use the following stack:
 | Styling | Tailwind CSS | Utility-first CSS |
 | Database | Supabase PostgreSQL | Managed PostgreSQL with real-time |
 | Authentication | Supabase Auth | User authentication |
-| AI | Claude Agent SDK (@anthropic-ai/claude-code) | AI agent capabilities |
+| AI | Claude Agent SDK (@anthropic-ai/claude-agent-sdk) | AI agent capabilities |
 | Deployment | Vercel | Hosting and edge functions |
 | Language | TypeScript | Type safety |
 
@@ -45,7 +45,7 @@ When creating a new project, guide students through these steps:
 
 4. **Install Claude Agent SDK:**
    ```bash
-   npm install @anthropic-ai/sdk
+   npm install @anthropic-ai/claude-agent-sdk
    ```
 
 5. **Additional dependencies:**
@@ -94,9 +94,9 @@ src/
 │   │   ├── client.ts      # Browser client
 │   │   ├── server.ts      # Server client
 │   │   └── middleware.ts  # Auth middleware
-│   ├── ai/
-│   │   ├── client.ts      # Anthropic client
-│   │   └── tools.ts       # Agent tools
+│   ├── agent/
+│   │   ├── tools.ts       # Custom tools with tool() and createSdkMcpServer()
+│   │   └── config.ts      # Agent configuration (allowedTools, permissions)
 │   └── utils.ts
 ├── hooks/                 # Custom React hooks
 ├── types/                 # TypeScript types
@@ -225,152 +225,378 @@ npx shadcn@latest add button card form input
 
 ## Claude Agent SDK Patterns
 
-### SDK Setup and Configuration
+The Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) is different from the standard Anthropic SDK. It provides **automatic tool execution**, **session management**, and **built-in tools** - you don't need to implement tool loops manually.
 
-**Initialize the Client (`lib/ai/client.ts`):**
-- Import `Anthropic` from `@anthropic-ai/sdk`
-- Create singleton instance with API key from environment
-- Configure default model (claude-sonnet-4-20250514 recommended for most tasks)
+### Key Differences from Standard Anthropic SDK
 
-**Model Selection:**
-- `claude-sonnet-4-20250514`: Balanced performance and cost for most use cases
-- `claude-opus-4-20250514`: Complex reasoning and analysis
-- Use environment variables to configure model selection
+| Feature | Agent SDK | Standard Anthropic SDK |
+|---------|-----------|----------------------|
+| Tool Execution | Automatic (built-in tools) | Manual (you implement) |
+| Tool Loop | Handled by SDK | You must implement |
+| Built-in Tools | Yes (Read, Write, Edit, Bash, Glob, etc.) | No |
+| Session Management | First-class feature | Must manage manually |
+| MCP Support | Native | Limited |
+
+### Core Functions
+
+**`query()`** - For single-session/one-off tasks:
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+// Simple one-off task - Claude handles tool execution automatically
+for await (const message of query({
+  prompt: "What files are in this directory?",
+  options: {
+    allowedTools: ["Bash", "Glob"],
+    permissionMode: "bypassPermissions"
+  }
+})) {
+  console.log(message);
+}
+```
 
 ### Creating Custom Tools
 
-**Tool Definition Structure:**
-Tools allow Claude to perform actions and retrieve information. Define tools with:
+Use the `tool()` function with `createSdkMcpServer()` to define custom tools:
 
-- `name`: Unique identifier (snake_case)
-- `description`: Clear explanation of what the tool does and when to use it
-- `input_schema`: JSON Schema defining required parameters
-
-**Tool Categories:**
-1. **Data retrieval tools**: Fetch from database, APIs, or external services
-2. **Action tools**: Perform operations like sending emails, creating records
-3. **Computation tools**: Process data, calculate values, transform information
-
-**Implementation Pattern:**
-- Define tool schema separately from execution logic
-- Create a tool handler function that maps tool names to implementations
-- Validate tool inputs before execution
-- Return structured results that Claude can interpret
-
-### Streaming Responses in Next.js
-
-**Why Streaming:**
-- Better user experience with immediate feedback
-- Reduces perceived latency
-- Enables real-time typing effect
-
-**Route Handler Pattern:**
-- Use `client.messages.stream()` method
-- Return a `ReadableStream` from the route handler
-- Set appropriate headers for streaming (`Content-Type: text/event-stream`)
-
-**Client-Side Consumption:**
-- Use `fetch` with response body reader
-- Parse Server-Sent Events (SSE) format
-- Update UI incrementally as chunks arrive
-- Handle stream completion and errors
-
-**With Tool Use:**
-- Stream may pause during tool execution
-- Handle `tool_use` events in the stream
-- Execute tools and continue the conversation
-- Consider showing tool execution status to users
-
-### Conversation Management
-
-**Message History:**
-- Store messages in state or database
-- Include both user and assistant messages
-- Maintain proper message format for API
-
-**Message Format:**
+**Example: Weather Tool (`lib/ai/tools.ts`):**
 ```typescript
-type Message = {
-  role: "user" | "assistant";
-  content: string | ContentBlock[];
-};
+import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
+
+// Define tool with Zod schema
+const getWeatherTool = tool(
+  "get_weather",
+  "Get current temperature for a location using coordinates",
+  {
+    latitude: z.number().describe("Latitude coordinate"),
+    longitude: z.number().describe("Longitude coordinate")
+  },
+  async (args) => {
+    const response = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${args.latitude}&longitude=${args.longitude}&current=temperature_2m`
+    );
+    const data = await response.json();
+
+    return {
+      content: [{
+        type: "text",
+        text: `Temperature: ${data.current.temperature_2m}°C`
+      }]
+    };
+  }
+);
+
+// Create MCP server with custom tools
+export const customToolsServer = createSdkMcpServer({
+  name: "my-custom-tools",
+  version: "1.0.0",
+  tools: [getWeatherTool]
+});
 ```
 
-**Context Management:**
-- Set system prompt for consistent behavior
-- Include relevant context in system prompt
-- Consider summarizing long conversations to manage token usage
+**Using Custom Tools in a Query:**
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { customToolsServer } from "@/lib/ai/tools";
 
-**State Patterns:**
-- Use React state for ephemeral conversations
-- Use Supabase for persistent chat history
-- Consider session-based storage for semi-persistent chats
+for await (const message of query({
+  prompt: "What's the weather in San Francisco?",
+  options: {
+    mcpServers: {
+      "my-custom-tools": customToolsServer
+    },
+    allowedTools: ["mcp__my-custom-tools__get_weather"]
+  }
+})) {
+  // Process messages
+}
+```
 
-### Multi-Turn Interactions
+### Permission Modes
 
-**Conversation Loop:**
-1. Send user message with history
-2. Receive assistant response
-3. Check for tool use in response
-4. If tool use: execute tool, add result, continue
-5. If no tool use: display response, await next user input
+Control how the SDK handles tool execution:
 
-**Tool Use Loop:**
-- Assistant may request multiple tools in sequence
-- Each tool result becomes a new message
-- Continue until assistant provides final response
-- Set reasonable limits on tool iterations
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
-**Handling Tool Results:**
-- Format tool results as `tool_result` content blocks
-- Include `tool_use_id` to link result to request
-- Handle tool errors gracefully with error messages
+// 1. acceptEdits - Auto-approve file changes (trusted dev workflows)
+for await (const message of query({
+  prompt: "Fix the bug in auth.ts",
+  options: {
+    allowedTools: ["Read", "Edit", "Write"],
+    permissionMode: "acceptEdits"
+  }
+})) { /* ... */ }
 
-### Error Handling for AI Operations
+// 2. bypassPermissions - No prompts (CI/CD, automation)
+for await (const message of query({
+  prompt: "Run the test suite",
+  options: {
+    allowedTools: ["Read", "Edit", "Bash"],
+    permissionMode: "bypassPermissions"
+  }
+})) { /* ... */ }
 
-**API Errors:**
-- Handle rate limits with exponential backoff
-- Catch authentication errors and prompt for valid key
-- Handle network errors with retry logic
+// 3. default - Custom approval handler
+for await (const message of query({
+  prompt: "Modify the database schema",
+  options: {
+    permissionMode: "default",
+    canUseTool: async (toolName, inputData) => {
+      // Block dangerous commands
+      if (toolName === "Bash" && inputData.command?.includes("rm -rf")) {
+        return false;
+      }
+      return true;
+    }
+  }
+})) { /* ... */ }
+```
 
-**Content Errors:**
-- Handle content filtering responses
-- Provide fallback responses for blocked content
-- Log issues for review
+### Session Management
 
-**Tool Errors:**
-- Catch and format tool execution errors
-- Return error information to Claude for handling
-- Allow Claude to retry or use alternative approaches
+Sessions allow Claude to remember context across multiple queries:
 
-**User-Facing Errors:**
-- Show friendly error messages
-- Provide retry options
-- Log detailed errors server-side
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
-### Rate Limiting and Usage Considerations
+let sessionId: string | undefined;
 
-**Client-Side Throttling:**
+// First query - capture session ID
+for await (const message of query({
+  prompt: "Read the authentication module",
+  options: {
+    allowedTools: ["Read", "Glob"],
+    model: "claude-sonnet-4-5"
+  }
+})) {
+  if (message.type === 'system' && message.subtype === 'init') {
+    sessionId = message.session_id;
+  }
+  console.log(message);
+}
+
+// Resume session - Claude remembers context from previous query
+for await (const message of query({
+  prompt: "Now find all places that call it",
+  options: {
+    resume: sessionId,
+    model: "claude-sonnet-4-5"
+  }
+})) {
+  console.log(message);
+}
+
+// Fork session - Creates a new branch to explore different approach
+for await (const message of query({
+  prompt: "What if we used a different auth strategy?",
+  options: {
+    resume: sessionId,
+    forkSession: true  // Creates new session branch
+  }
+})) {
+  console.log(message);
+}
+```
+
+### Next.js API Route Integration
+
+**Route Handler (`app/api/agent/route.ts`):**
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { NextRequest } from "next/server";
+
+export async function POST(request: NextRequest) {
+  const { prompt, sessionId } = await request.json();
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        for await (const message of query({
+          prompt,
+          options: {
+            allowedTools: ["Read", "Glob", "Grep"],
+            permissionMode: "bypassPermissions",
+            resume: sessionId,
+            model: "claude-sonnet-4-5"
+          }
+        })) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(message)}\n\n`)
+          );
+        }
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive"
+    }
+  });
+}
+```
+
+**Client-Side Hook (`hooks/useAgent.ts`):**
+```typescript
+import { useState, useCallback } from "react";
+
+interface AgentMessage {
+  type: string;
+  content?: string;
+  session_id?: string;
+}
+
+export function useAgent() {
+  const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<string | undefined>();
+
+  const sendMessage = useCallback(async (prompt: string) => {
+    setIsLoading(true);
+
+    const response = await fetch("/api/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, sessionId })
+    });
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+
+    while (reader) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split("\n").filter(line => line.startsWith("data: "));
+
+      for (const line of lines) {
+        const data = line.slice(6);
+        if (data === "[DONE]") continue;
+
+        const message = JSON.parse(data);
+        setMessages(prev => [...prev, message]);
+
+        // Capture session ID for future queries
+        if (message.type === "system" && message.session_id) {
+          setSessionId(message.session_id);
+        }
+      }
+    }
+
+    setIsLoading(false);
+  }, [sessionId]);
+
+  return { messages, isLoading, sessionId, sendMessage };
+}
+```
+
+### Tool Categories and Access
+
+**Read-only analysis:**
+```typescript
+allowedTools: ["Read", "Glob", "Grep"]
+```
+
+**Code modification:**
+```typescript
+allowedTools: ["Read", "Edit", "Write", "Glob"]
+```
+
+**Full automation:**
+```typescript
+allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
+```
+
+**Web integration:**
+```typescript
+allowedTools: ["Read", "Edit", "WebSearch", "WebFetch"]
+```
+
+### System Prompts
+
+```typescript
+// Custom system prompt
+for await (const message of query({
+  prompt: "Review this code",
+  options: {
+    systemPrompt: "You are a senior TypeScript developer. Always suggest improvements."
+  }
+})) { /* ... */ }
+
+// Use Claude Code's preset system prompt with additions
+for await (const message of query({
+  prompt: "Fix the bug",
+  options: {
+    systemPrompt: {
+      type: "preset",
+      preset: "claude_code",
+      append: "Always add type annotations to new functions."
+    }
+  }
+})) { /* ... */ }
+```
+
+### Error Handling
+
+```typescript
+import {
+  query,
+  CLINotFoundError,
+  ProcessError,
+  CLIJSONDecodeError
+} from "@anthropic-ai/claude-agent-sdk";
+
+try {
+  for await (const message of query({ prompt: "Hello" })) {
+    console.log(message);
+  }
+} catch (error) {
+  if (error instanceof CLINotFoundError) {
+    console.error("Please install Claude Code: npm install -g @anthropic-ai/claude-code");
+  } else if (error instanceof ProcessError) {
+    console.error(`Process failed with exit code: ${error.exitCode}`);
+  } else if (error instanceof CLIJSONDecodeError) {
+    console.error(`Failed to parse response: ${error}`);
+  }
+}
+```
+
+### Model Selection
+
+```typescript
+// claude-sonnet-4-5: Balanced performance and cost (recommended for most tasks)
+options: { model: "claude-sonnet-4-5" }
+
+// claude-opus-4-5: Complex reasoning and analysis
+options: { model: "claude-opus-4-5" }
+```
+
+### Production Considerations
+
+**Rate Limiting:**
 - Debounce user input to prevent rapid requests
-- Queue requests during high activity
-- Show rate limit warnings to users
-
-**Server-Side Controls:**
 - Implement request rate limiting per user
 - Track token usage per user/session
-- Set daily/monthly limits if needed
+
+**Security:**
+- Use `canUseTool` handler to block dangerous operations
+- Restrict `allowedTools` to minimum necessary
+- Never expose API keys to client
 
 **Cost Management:**
-- Monitor API usage via Anthropic console
-- Use caching for repeated queries
 - Choose appropriate model for each task
-- Consider prompt optimization to reduce tokens
-
-**Production Considerations:**
-- Use environment-specific API keys
-- Implement usage logging and monitoring
-- Set up alerts for unusual usage patterns
-- Plan for scaling based on user growth
+- Use session resumption to maintain context efficiently
+- Monitor API usage via Anthropic console
 
 ---
 

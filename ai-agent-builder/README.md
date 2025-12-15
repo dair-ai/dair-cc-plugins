@@ -54,7 +54,7 @@ The plugin guides you through building with:
 | Styling | Tailwind CSS | Utility-first CSS |
 | Database | Supabase PostgreSQL | Managed PostgreSQL with real-time |
 | Authentication | Supabase Auth | User authentication |
-| AI | Anthropic SDK | Claude AI integration |
+| AI | Claude Agent SDK | AI agent capabilities with built-in tools |
 | Deployment | Vercel | Hosting and edge functions |
 | Language | TypeScript | Type safety |
 
@@ -73,12 +73,13 @@ The plugin guides you through building with:
 - API routes and server actions
 - Form handling with react-hook-form and Zod
 
-### Claude AI Integration
-- SDK setup and configuration
-- Creating custom tools for AI agents
-- Streaming responses in Next.js
-- Conversation management
-- Multi-turn interactions with tool use
+### Claude Agent SDK Integration
+- `query()` function for one-off agentic tasks
+- Custom tools with `tool()` and `createSdkMcpServer()`
+- Session management (resume, fork)
+- Permission modes for tool execution control
+- Streaming responses in Next.js API routes
+- Built-in tools (Read, Write, Edit, Bash, Glob, Grep, etc.)
 
 ### Deployment
 - Vercel CLI commands and workflows
