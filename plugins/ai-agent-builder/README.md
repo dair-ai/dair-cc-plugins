@@ -1,6 +1,6 @@
 # AI Agent Builder Plugin
 
-A Claude Code plugin that helps you build modern web applications with AI capabilities using a unified tech stack.
+A Claude Code plugin that helps you build multi-agent AI systems with the Claude Agent SDK. From simple single-agent queries to complex orchestrated pipelines with Vercel Sandbox deployment.
 
 ## Installation
 
@@ -13,34 +13,34 @@ Add the DAIR.AI marketplace and install the plugin:
 
 ## Usage
 
-Once installed, invoke the web-builder skill when you want to build a web application:
+Once installed, invoke the web-builder skill when you want to build an agentic application:
 
 ```
 /skill web-builder
 ```
 
-Or simply ask Claude Code to help you build a web app - the skill will be activated automatically when relevant.
+Or simply ask Claude Code to help you build an AI agent - the skill will be activated automatically when relevant.
 
 ### Example Prompts
 
-**Start a new project:**
+**Build a research agent:**
 ```
-Help me create a new web app for tracking personal expenses
-```
-
-**Add authentication:**
-```
-Add user authentication with email/password and Google OAuth
+Help me build a research agent that uses Exa search to find and synthesize information
 ```
 
-**Build an AI feature:**
+**Create a multi-agent pipeline:**
 ```
-Add a chat interface that uses Claude to help users categorize their expenses
+Build a multi-agent system with a planner, searcher, and report writer
 ```
 
-**Deploy the app:**
+**Add Vercel Sandbox for production:**
 ```
-Help me deploy this app to Vercel
+Add Vercel Sandbox support so my agent can run in production
+```
+
+**Simple agent query:**
+```
+Add a chat interface that uses Claude Agent SDK to answer questions
 ```
 
 ## Tech Stack
@@ -55,36 +55,62 @@ The plugin guides you through building with:
 | Database | Supabase PostgreSQL | Managed PostgreSQL with real-time |
 | Authentication | Supabase Auth | User authentication |
 | AI | Claude Agent SDK | AI agent capabilities with built-in tools |
+| AI Tools | Exa (exa-js) | Neural web search for agents |
+| Agent Runtime | Vercel Sandbox | Isolated container for production agents |
 | Deployment | Vercel | Hosting and edge functions |
 | Language | TypeScript | Type safety |
 
 ## What the Skill Provides
 
+### Multi-Agent Orchestration
+- **Orchestrator pattern** - Coordinate multiple specialized subagents
+- **Subagent definitions** - Planner, executor, and writer agents with specific roles
+- **Stage tracking** - Real-time progress through pipeline stages
+- **Data passing** - Complete context transfer between agents
+
+### Vercel Sandbox Integration
+- **Environment detection** - Auto-route between local and production
+- **Sandbox execution** - Run agents in isolated containers
+- **Script generation** - Dynamic agent code for sandbox
+- **Progressive learning** - Build locally first, add sandbox for production
+
+### SSE Streaming for Pipelines
+- **Message types** - stage_change, status, result, error
+- **Real-time updates** - Stream progress to frontend
+- **Stage announcements** - Parse orchestrator stage transitions
+
+### State Management
+- **Pipeline hooks** - useResearchAgent for complex state
+- **Stage tracking** - pending/active/completed status
+- **Source extraction** - Parse tool results for discovered sources
+
+### Claude Agent SDK Patterns
+- `query()` function for agentic tasks
+- Custom tools with `tool()` and `createSdkMcpServer()`
+- Exa search integration (neural search, get_contents, find_similar)
+- Session management (resume, fork)
+- Permission modes for tool execution control
+
 ### Project Scaffolding
 - Next.js project setup with TypeScript and Tailwind
 - shadcn/ui component library configuration
 - Supabase integration for database and auth
-- Recommended folder structure
-
-### Implementation Patterns
-- Supabase client setup (browser, server, middleware)
-- Authentication flows (sign up, sign in, protected routes)
-- Database schema design with Row Level Security
-- API routes and server actions
-- Form handling with react-hook-form and Zod
-
-### Claude Agent SDK Integration
-- `query()` function for one-off agentic tasks
-- Custom tools with `tool()` and `createSdkMcpServer()`
-- Session management (resume, fork)
-- Permission modes for tool execution control
-- Streaming responses in Next.js API routes
-- Built-in tools (Read, Write, Edit, Bash, Glob, Grep, etc.)
+- Recommended folder structure for agent projects
 
 ### Deployment
 - Vercel CLI commands and workflows
+- Vercel Sandbox configuration
 - Environment variable management
 - Production checklist
+
+## Progressive Learning Path
+
+Students can build in stages:
+
+1. **Stage 1**: Simple single-agent queries with Claude Agent SDK
+2. **Stage 2**: Add custom tools and Exa search integration
+3. **Stage 3**: Implement multi-agent orchestration
+4. **Stage 4**: Add Vercel Sandbox for production deployment
 
 ## License
 

@@ -1,12 +1,12 @@
 ---
 name: ai-agent-builder
-description: Build modern AI-powered web applications using the Claude Agent SDK. Use this skill when creating full-stack apps with Next.js, Supabase, and AI agent capabilities including custom tools, Exa search integration, and agentic workflows.
+description: Build multi-agent AI systems with Claude Agent SDK. Use this skill for creating agentic applications with orchestrator patterns, Exa search integration, SSE streaming, and Vercel Sandbox deployment. Supports progressive learning from simple agents to production multi-agent pipelines.
 license: MIT
 ---
 
 # Web Builder Skill
 
-Use this skill when helping students build modern web applications with AI capabilities. This skill provides guidance for a unified tech stack optimized for building production-ready applications.
+Use this skill when helping students build modern web applications with AI capabilities. This skill provides guidance for a unified tech stack optimized for building production-ready agentic applications, from simple single-agent queries to complex multi-agent orchestration with Vercel Sandbox deployment.
 
 ## Unified Tech Stack
 
@@ -21,6 +21,8 @@ When building web applications with this skill, use the following stack:
 | Database | Supabase PostgreSQL | Managed PostgreSQL with real-time |
 | Authentication | Supabase Auth | User authentication |
 | AI | Claude Agent SDK (@anthropic-ai/claude-agent-sdk) | AI agent capabilities |
+| AI Tools | Exa (exa-js) | Neural web search for agents |
+| Agent Runtime | Vercel Sandbox (@vercel/sandbox) | Isolated container for production agents |
 | Deployment | Vercel | Hosting and edge functions |
 | Language | TypeScript | Type safety |
 
@@ -59,7 +61,12 @@ When creating a new project, guide students through these steps:
    npm install exa-js
    ```
 
-6. **Additional dependencies:**
+6. **Install Vercel Sandbox (for production agent deployment):**
+   ```bash
+   npm install @vercel/sandbox
+   ```
+
+7. **Additional dependencies:**
    ```bash
    npm install zod react-hook-form @hookform/resolvers
    ```
@@ -83,6 +90,20 @@ EXA_API_KEY=your-exa-api-key
 # App
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
+
+For **Vercel production deployment** with agent sandbox support, add these to your Vercel project settings:
+
+```env
+# Vercel Sandbox (required for production agent execution)
+VERCEL_TOKEN=your-vercel-api-token
+VERCEL_PROJECT_ID=your-project-id
+VERCEL_TEAM_ID=your-team-id  # Optional, only for team projects
+```
+
+**Getting Vercel Sandbox credentials:**
+1. `VERCEL_TOKEN`: Create at https://vercel.com/account/tokens
+2. `VERCEL_PROJECT_ID`: Found in Project Settings → General
+3. `VERCEL_TEAM_ID`: Found in Team Settings (only needed for team projects)
 
 ### Recommended Folder Structure
 
@@ -110,7 +131,13 @@ src/
 │   │   └── middleware.ts  # Auth middleware
 │   ├── agent/
 │   │   ├── tools.ts       # Custom tools with tool() and createSdkMcpServer()
-│   │   └── config.ts      # Agent configuration (allowedTools, permissions)
+│   │   ├── config.ts      # Orchestrator configuration
+│   │   ├── subagents.ts   # Subagent definitions (planner, executor, writer)
+│   │   ├── orchestrator.ts # Pipeline runner
+│   │   └── prompts.ts     # System prompts for agents
+│   ├── sandbox/
+│   │   ├── index.ts       # Environment detection
+│   │   └── runner.ts      # Vercel Sandbox execution
 │   └── utils.ts
 ├── hooks/                 # Custom React hooks
 ├── types/                 # TypeScript types
@@ -790,7 +817,747 @@ options: { model: "claude-sonnet-4-5" }
 
 // claude-opus-4-5: Complex reasoning and analysis
 options: { model: "claude-opus-4-5" }
+
+// claude-haiku-4-5: Fast and cost-effective (good for subagents)
+options: { model: "claude-haiku-4-5-20251001" }
 ```
+
+---
+
+## Multi-Agent Orchestration Pattern
+
+For complex tasks like research, content generation, or multi-step workflows, use an **orchestrator pattern** where a main agent delegates to specialized subagents.
+
+### Architecture Overview
+
+```
+User Input
+  ↓
+Orchestrator Agent (coordinates the pipeline)
+  ├→ Stage 1: Planner Subagent (creates plan/queries)
+  ├→ Stage 2: Executor Subagent (executes searches/actions)
+  └→ Stage 3: Writer Subagent (generates final output)
+  ↓
+Final Result
+```
+
+### Subagent Definitions
+
+Define specialized subagents with specific roles, tools, and models:
+
+```typescript
+// lib/agent/subagents.ts
+export const PLANNER_SUBAGENT = {
+  name: "planner",
+  description: "Analyzes the research topic and creates optimized search queries",
+  model: "claude-haiku-4-5-20251001",
+  tools: [], // No tools - planning only
+  systemPrompt: `You are a research planning specialist. Your task is to analyze
+a research topic and create a structured search plan.
+
+OUTPUT FORMAT (JSON):
+{
+  "date_range": {
+    "start": "YYYY-MM-DD",
+    "end": "YYYY-MM-DD"
+  },
+  "search_queries": [
+    {
+      "query": "specific search query",
+      "type": "neural" | "keyword",
+      "priority": 1-4,
+      "rationale": "why this query is important"
+    }
+  ]
+}
+
+Create 4-6 diverse queries covering different aspects of the topic.`
+};
+
+export const WEB_SEARCH_SUBAGENT = {
+  name: "web-search",
+  description: "Executes search plan and gathers sources using Exa",
+  model: "claude-haiku-4-5-20251001",
+  tools: [
+    "mcp__exa-research__search",
+    "mcp__exa-research__get_contents"
+  ],
+  systemPrompt: `You are a web research specialist. Execute the provided search
+plan systematically.
+
+PROCESS:
+1. Run each search query from the plan
+2. Identify the 6 most relevant URLs from results
+3. Fetch full content from those URLs using get_contents
+4. Return all gathered information
+
+Always complete ALL searches before moving to content fetching.`
+};
+
+export const REPORT_WRITER_SUBAGENT = {
+  name: "report-writer",
+  description: "Creates comprehensive research report from gathered sources",
+  model: "claude-haiku-4-5-20251001",
+  tools: [], // No tools - writing only
+  systemPrompt: `You are a research report writer. Create a comprehensive,
+well-structured report from the provided research findings.
+
+OUTPUT FORMAT (Markdown):
+## Summary
+Brief 2-3 paragraph overview
+
+## Key Findings
+- Finding 1 with [source](url)
+- Finding 2 with [source](url)
+
+## Detailed Analysis
+In-depth discussion organized by theme
+
+## Conclusion
+Key takeaways and implications
+
+## References
+All sources cited with URLs
+
+Always cite sources inline with markdown links.`
+};
+```
+
+### Orchestrator Configuration
+
+The orchestrator coordinates subagents and tracks pipeline progress:
+
+```typescript
+// lib/agent/config.ts
+import { exaSearchTools } from "./tools";
+
+export const ORCHESTRATOR_CONFIG = {
+  model: "claude-haiku-4-5-20251001",
+  systemPrompt: `You are a research orchestrator managing a 3-stage pipeline.
+
+CRITICAL RULES:
+1. Execute stages in EXACT order: Planner → WebSearch → ReportWriter
+2. Announce each stage with: "STAGE: [stage-name]"
+3. Pass complete data between stages
+4. Never skip stages or execute out of order
+
+PIPELINE:
+1. STAGE: Planner - Create search plan from topic
+2. STAGE: WebSearch - Execute searches, gather sources
+3. STAGE: ReportWriter - Generate final report
+
+Start by announcing "STAGE: Planner" and delegating to the planning subagent.`,
+
+  mcpServers: {
+    "exa-research": exaSearchTools
+  },
+
+  allowedTools: [
+    "mcp__exa-research__search",
+    "mcp__exa-research__get_contents",
+    "Task" // For delegating to subagents
+  ],
+
+  disallowedTools: [
+    "WebFetch",
+    "WebSearch" // Use Exa instead
+  ],
+
+  permissionMode: "bypassPermissions"
+};
+```
+
+### Running the Orchestrated Pipeline
+
+```typescript
+// lib/agent/orchestrator.ts
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { ORCHESTRATOR_CONFIG } from "./config";
+import {
+  PLANNER_SUBAGENT,
+  WEB_SEARCH_SUBAGENT,
+  REPORT_WRITER_SUBAGENT
+} from "./subagents";
+
+export async function* runResearchPipeline(topic: string) {
+  const subagents = [
+    PLANNER_SUBAGENT,
+    WEB_SEARCH_SUBAGENT,
+    REPORT_WRITER_SUBAGENT
+  ];
+
+  for await (const message of query({
+    prompt: `Research this topic thoroughly: ${topic}`,
+    options: {
+      model: ORCHESTRATOR_CONFIG.model,
+      systemPrompt: ORCHESTRATOR_CONFIG.systemPrompt,
+      mcpServers: ORCHESTRATOR_CONFIG.mcpServers,
+      allowedTools: ORCHESTRATOR_CONFIG.allowedTools,
+      disallowedTools: ORCHESTRATOR_CONFIG.disallowedTools,
+      permissionMode: ORCHESTRATOR_CONFIG.permissionMode,
+      subagents
+    }
+  })) {
+    // Detect stage changes from orchestrator announcements
+    if (message.type === "assistant" && message.content) {
+      const text = typeof message.content === "string"
+        ? message.content
+        : message.content.find((b: any) => b.type === "text")?.text || "";
+
+      const stageMatch = text.match(/STAGE:\s*(\w+)/i);
+      if (stageMatch) {
+        yield {
+          type: "stage_change",
+          stage: stageMatch[1].toLowerCase(),
+          timestamp: Date.now()
+        };
+      }
+    }
+
+    yield message;
+  }
+}
+```
+
+### Stage Tracking Best Practices
+
+| Practice | Description |
+|----------|-------------|
+| **Explicit Announcements** | Orchestrator says "STAGE: X" for parsing |
+| **Sequential Execution** | Never parallelize dependent stages |
+| **Complete Data Passing** | Pass full context between stages |
+| **Subagent Isolation** | Each subagent has specific tools only |
+| **Model Selection** | Use haiku for subagents, sonnet for complex orchestration |
+
+---
+
+## SSE Streaming for Agent Pipelines
+
+Real-time progress tracking requires structured Server-Sent Events (SSE) with multiple message types.
+
+### Message Types
+
+Define consistent message types for the frontend:
+
+```typescript
+// types/research.ts
+export type PipelineStage = "orchestrator" | "planner" | "web-search" | "report-writer";
+
+export interface StageChangeMessage {
+  type: "stage_change";
+  stage: PipelineStage;
+  timestamp: number;
+  description?: string;
+}
+
+export interface StatusMessage {
+  type: "status";
+  content: string;
+}
+
+export interface ResultMessage {
+  type: "result";
+  result: string;
+  session_id?: string;
+}
+
+export interface ErrorMessage {
+  type: "error";
+  content: string;
+}
+
+export type PipelineMessage =
+  | StageChangeMessage
+  | StatusMessage
+  | ResultMessage
+  | ErrorMessage;
+```
+
+### API Route with Stage Tracking
+
+```typescript
+// app/api/research/route.ts
+import { NextRequest } from "next/server";
+import { runResearchPipeline } from "@/lib/agent/orchestrator";
+
+export const maxDuration = 300; // 5 minutes for long research
+
+export async function POST(request: NextRequest) {
+  const { topic } = await request.json();
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const sendMessage = (msg: object) => {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(msg)}\n\n`)
+        );
+      };
+
+      try {
+        sendMessage({ type: "status", content: "Starting research pipeline..." });
+
+        for await (const message of runResearchPipeline(topic)) {
+          // Forward stage changes
+          if (message.type === "stage_change") {
+            sendMessage(message);
+            continue;
+          }
+
+          // Extract text content for final result
+          if (message.type === "assistant") {
+            const content = message.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block.type === "text") {
+                  // Check if this looks like the final report
+                  if (block.text.includes("## Summary") ||
+                      block.text.includes("## Key Findings")) {
+                    sendMessage({
+                      type: "result",
+                      result: block.text,
+                      session_id: message.session_id
+                    });
+                  }
+                }
+              }
+            }
+          }
+
+          // Forward tool usage as status
+          if (message.type === "tool_use") {
+            sendMessage({
+              type: "status",
+              content: `Using tool: ${message.name}`
+            });
+          }
+        }
+
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      } catch (error) {
+        sendMessage({
+          type: "error",
+          content: error instanceof Error ? error.message : "Unknown error"
+        });
+      } finally {
+        controller.close();
+      }
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive"
+    }
+  });
+}
+```
+
+---
+
+## State Management for Agent Pipelines
+
+Complex agent interactions require structured state management on the frontend.
+
+### Pipeline State Hook
+
+```typescript
+// hooks/useResearchAgent.ts
+import { useState, useCallback, useRef } from "react";
+import type { PipelineStage, PipelineMessage } from "@/types/research";
+
+interface StageProgress {
+  stage: PipelineStage;
+  status: "pending" | "active" | "completed";
+  startTime?: number;
+  endTime?: number;
+}
+
+interface ResearchSource {
+  title: string;
+  url: string;
+  author?: string;
+  snippet?: string;
+}
+
+interface ResearchState {
+  status: "idle" | "researching" | "completed" | "error";
+  currentStage: PipelineStage | null;
+  stages: StageProgress[];
+  sources: ResearchSource[];
+  report: string;
+  sessionId?: string;
+  error?: string;
+}
+
+const INITIAL_STAGES: StageProgress[] = [
+  { stage: "planner", status: "pending" },
+  { stage: "web-search", status: "pending" },
+  { stage: "report-writer", status: "pending" }
+];
+
+export function useResearchAgent() {
+  const [state, setState] = useState<ResearchState>({
+    status: "idle",
+    currentStage: null,
+    stages: INITIAL_STAGES,
+    sources: [],
+    report: "",
+  });
+
+  const abortRef = useRef<AbortController | null>(null);
+
+  const startResearch = useCallback(async (topic: string) => {
+    abortRef.current = new AbortController();
+
+    setState(prev => ({
+      ...prev,
+      status: "researching",
+      stages: INITIAL_STAGES,
+      sources: [],
+      report: "",
+      error: undefined
+    }));
+
+    try {
+      const response = await fetch("/api/research", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic }),
+        signal: abortRef.current.signal
+      });
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n").filter(l => l.startsWith("data: "));
+
+        for (const line of lines) {
+          const data = line.slice(6);
+          if (data === "[DONE]") continue;
+
+          const message: PipelineMessage = JSON.parse(data);
+
+          switch (message.type) {
+            case "stage_change":
+              setState(prev => ({
+                ...prev,
+                currentStage: message.stage,
+                stages: prev.stages.map(s => {
+                  if (s.stage === message.stage) {
+                    return { ...s, status: "active", startTime: Date.now() };
+                  }
+                  if (s.status === "active") {
+                    return { ...s, status: "completed", endTime: Date.now() };
+                  }
+                  return s;
+                })
+              }));
+              break;
+
+            case "result":
+              setState(prev => ({
+                ...prev,
+                status: "completed",
+                report: message.result,
+                sessionId: message.session_id,
+                stages: prev.stages.map(s =>
+                  s.status === "active"
+                    ? { ...s, status: "completed", endTime: Date.now() }
+                    : s
+                )
+              }));
+              break;
+
+            case "error":
+              setState(prev => ({
+                ...prev,
+                status: "error",
+                error: message.content
+              }));
+              break;
+          }
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name !== "AbortError") {
+        setState(prev => ({
+          ...prev,
+          status: "error",
+          error: error.message
+        }));
+      }
+    }
+  }, []);
+
+  const cancelResearch = useCallback(() => {
+    abortRef.current?.abort();
+    setState(prev => ({ ...prev, status: "idle" }));
+  }, []);
+
+  const reset = useCallback(() => {
+    setState({
+      status: "idle",
+      currentStage: null,
+      stages: INITIAL_STAGES,
+      sources: [],
+      report: ""
+    });
+  }, []);
+
+  return {
+    ...state,
+    startResearch,
+    cancelResearch,
+    reset
+  };
+}
+```
+
+### Extracting Sources from Tool Results
+
+Parse tool results to extract discovered sources:
+
+```typescript
+// Inside useResearchAgent, add source extraction:
+const extractSources = (message: any): ResearchSource[] => {
+  if (message.type !== "tool_result") return [];
+
+  try {
+    const content = JSON.parse(message.content);
+    if (content.results) {
+      return content.results.map((r: any) => ({
+        title: r.title,
+        url: r.url,
+        author: r.author,
+        snippet: r.text?.slice(0, 200)
+      }));
+    }
+  } catch {
+    return [];
+  }
+  return [];
+};
+
+// Deduplicate sources by URL
+const addSources = (newSources: ResearchSource[]) => {
+  setState(prev => {
+    const existingUrls = new Set(prev.sources.map(s => s.url));
+    const uniqueNew = newSources.filter(s => !existingUrls.has(s.url));
+    return {
+      ...prev,
+      sources: [...prev.sources, ...uniqueNew]
+    };
+  });
+};
+```
+
+---
+
+## Vercel Sandbox Integration
+
+**Why Sandbox?** The Claude Agent SDK spawns subprocesses for MCP servers, but Vercel serverless functions cannot spawn subprocesses. Vercel Sandbox provides isolated containers that can.
+
+### When to Use Sandbox
+
+| Environment | Approach |
+|-------------|----------|
+| **Local Development** | Direct SDK execution (no sandbox needed) |
+| **Vercel Production** | Use Vercel Sandbox for agent execution |
+
+### Environment Detection
+
+```typescript
+// lib/sandbox/index.ts
+export function isVercelEnvironment(): boolean {
+  return Boolean(process.env.VERCEL || process.env.VERCEL_ENV);
+}
+```
+
+### Key Sandbox Pattern
+
+```typescript
+// lib/sandbox/runner.ts
+import { Sandbox } from "@vercel/sandbox";
+
+export async function runAgentInSandbox(
+  topic: string,
+  onMessage: (msg: object) => void
+) {
+  const sandbox = await Sandbox.create({
+    runtime: "node22",
+    timeout: 300_000, // 5 minutes
+    // Auth - set these in Vercel dashboard
+    token: process.env.VERCEL_TOKEN,
+    projectId: process.env.VERCEL_PROJECT_ID,
+    teamId: process.env.VERCEL_TEAM_ID // Optional, for team projects
+  });
+
+  try {
+    // 1. Write package.json
+    await sandbox.writeFile("/vercel/sandbox/package.json", JSON.stringify({
+      name: "research-agent",
+      type: "module",
+      dependencies: {
+        "@anthropic-ai/claude-agent-sdk": "^0.1.72",
+        "exa-js": "^2.0.11",
+        "zod": "^3.25.0"
+      }
+    }));
+
+    // 2. Write research script (include your agent code here)
+    const script = generateResearchScript(topic);
+    await sandbox.writeFile("/vercel/sandbox/index.js", script);
+
+    // 3. Install dependencies
+    await sandbox.runCommand({
+      cmd: "npm",
+      args: ["install"],
+      cwd: "/vercel/sandbox"
+    });
+
+    // 4. Execute agent
+    const result = await sandbox.runCommand({
+      cmd: "node",
+      args: ["index.js"],
+      cwd: "/vercel/sandbox",
+      env: {
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY!,
+        EXA_API_KEY: process.env.EXA_API_KEY!
+      }
+    });
+
+    // 5. Parse output (use markers for structured messages)
+    const lines = result.stdout.split("\n");
+    for (const line of lines) {
+      if (line.startsWith("__MSG__")) {
+        const json = line.replace("__MSG__", "");
+        onMessage(JSON.parse(json));
+      }
+    }
+  } finally {
+    await sandbox.stop();
+  }
+}
+
+function generateResearchScript(topic: string): string {
+  // Escape the topic for safe embedding
+  const escapedTopic = topic.replace(/\\/g, "\\\\").replace(/`/g, "\\`");
+
+  return `
+// Dynamic research script for sandbox execution
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+const topic = \`${escapedTopic}\`;
+
+// Output helper - prefix messages for parsing
+const emit = (msg) => console.log("__MSG__" + JSON.stringify(msg));
+
+async function main() {
+  emit({ type: "status", content: "Starting research..." });
+
+  for await (const message of query({
+    prompt: \`Research: \${topic}\`,
+    options: {
+      // Your agent configuration here
+      permissionMode: "bypassPermissions"
+    }
+  })) {
+    // Forward relevant messages
+    if (message.type === "assistant") {
+      emit({ type: "progress", content: message });
+    }
+  }
+
+  emit({ type: "done" });
+}
+
+main().catch(err => {
+  emit({ type: "error", content: err.message });
+  process.exit(1);
+});
+`;
+}
+```
+
+### API Route with Environment Routing
+
+```typescript
+// app/api/research/route.ts
+import { isVercelEnvironment } from "@/lib/sandbox";
+import { runAgentInSandbox } from "@/lib/sandbox/runner";
+import { runResearchPipeline } from "@/lib/agent/orchestrator";
+
+export async function POST(request: NextRequest) {
+  const { topic } = await request.json();
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const sendMessage = (msg: object) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`));
+      };
+
+      try {
+        if (isVercelEnvironment()) {
+          // Production: Use Vercel Sandbox
+          await runAgentInSandbox(topic, sendMessage);
+        } else {
+          // Development: Direct SDK execution
+          for await (const msg of runResearchPipeline(topic)) {
+            sendMessage(msg);
+          }
+        }
+
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      } catch (error) {
+        sendMessage({ type: "error", content: String(error) });
+      } finally {
+        controller.close();
+      }
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache"
+    }
+  });
+}
+```
+
+### Environment Variables for Sandbox
+
+Add these to your Vercel project settings:
+
+```env
+# Required for Vercel Sandbox
+VERCEL_TOKEN=your-vercel-api-token
+VERCEL_PROJECT_ID=your-project-id
+VERCEL_TEAM_ID=your-team-id  # Optional, only for team projects
+
+# Agent API Keys (passed to sandbox)
+ANTHROPIC_API_KEY=your-api-key
+EXA_API_KEY=your-exa-api-key
+```
+
+### Progressive Learning Path
+
+Students can build in stages:
+
+1. **Stage 1**: Build and test locally with direct SDK execution
+2. **Stage 2**: Add multi-agent orchestration
+3. **Stage 3**: Integrate Vercel Sandbox for production deployment
+
+The environment detection automatically routes to the correct execution method.
 
 ### Production Considerations
 
