@@ -8,6 +8,44 @@ license: MIT
 
 Use this skill when helping students build modern web applications with AI capabilities. This skill provides guidance for a unified tech stack optimized for building production-ready agentic applications, from simple single-agent queries to complex multi-agent orchestration with Vercel Sandbox deployment.
 
+---
+
+## ⚠️ CRITICAL: SDK Selection
+
+**ALWAYS use the Claude Agent SDK. NEVER use the standard Anthropic SDK.**
+
+| ✅ MUST USE | ❌ DO NOT USE |
+|-------------|---------------|
+| `@anthropic-ai/claude-agent-sdk` | `@anthropic-ai/sdk` |
+| `import { query } from "@anthropic-ai/claude-agent-sdk"` | `import Anthropic from "@anthropic-ai/sdk"` |
+
+**Why this matters:**
+- The **Agent SDK** handles tool loops automatically - no manual implementation needed
+- The **Agent SDK** provides built-in tools (Read, Write, Edit, Bash, Glob, Grep)
+- The **Agent SDK** manages sessions and context automatically
+- Using the standard SDK requires manual tool loop implementation which is error-prone (e.g., tool_result ordering bugs)
+
+**Quick validation:** If you see `new Anthropic()` or `client.messages.create()` in the code, **STOP** - you're using the wrong SDK. Refactor to use `query()` from the Agent SDK instead.
+
+```typescript
+// ✅ CORRECT - Agent SDK
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+for await (const message of query({
+  prompt: "Research this topic",
+  options: { allowedTools: ["Read", "Glob"], permissionMode: "bypassPermissions" }
+})) {
+  console.log(message);
+}
+
+// ❌ WRONG - Standard SDK (DO NOT USE)
+import Anthropic from "@anthropic-ai/sdk";
+const client = new Anthropic();
+const response = await client.messages.create({ ... }); // NO!
+```
+
+---
+
 ## Unified Tech Stack
 
 When building web applications with this skill, use the following stack:
@@ -51,10 +89,11 @@ When creating a new project, guide students through these steps:
    npm install @supabase/supabase-js @supabase/ssr
    ```
 
-4. **Install Claude Agent SDK:**
+4. **Install Claude Agent SDK (REQUIRED - not the standard SDK):**
    ```bash
    npm install @anthropic-ai/claude-agent-sdk
    ```
+   > ⚠️ **Do NOT install `@anthropic-ai/sdk`** - that's the standard SDK without automatic tool handling. Always use the Agent SDK above.
 
 5. **Install Exa for web search (optional):**
    ```bash
@@ -783,6 +822,76 @@ for await (const message of query({
   }
 })) { /* ... */ }
 ```
+
+### Common Pitfalls
+
+#### ⚠️ Using the Wrong SDK
+
+**If you see this error, you're using the wrong SDK:**
+```
+invalid_request_error: `tool_use` ids were found without `tool_result` blocks immediately after
+```
+
+**Solution:** You're using `@anthropic-ai/sdk` instead of `@anthropic-ai/claude-agent-sdk`. The Agent SDK handles tool loops automatically. See the "CRITICAL: SDK Selection" section at the top of this document.
+
+**If you must use the standard SDK** (not recommended), here's the issue and fix:
+
+#### Tool Result Ordering with Standard Anthropic SDK
+
+When using the **standard Anthropic SDK** (not the Agent SDK), if Claude returns multiple `tool_use` blocks in a single response, you **must** provide ALL corresponding `tool_result` blocks together in the next user message. Failing to do this results in error 400:
+
+```
+invalid_request_error: `tool_use` ids were found without `tool_result` blocks immediately after
+```
+
+**Incorrect Pattern (causes error):**
+```typescript
+// DON'T: Add messages inside the loop for each tool_use
+for (const block of response.content) {
+  if (block.type === 'tool_use') {
+    const result = await executeTool(block.name, block.input);
+    // BAD: Adding assistant + tool_result inside loop
+    messages.push({ role: 'assistant', content: assistantContent });
+    messages.push({
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: block.id, content: result }]
+    });
+  }
+}
+```
+
+**Correct Pattern:**
+```typescript
+// DO: Collect all tool_use blocks, execute them, then add ALL results at once
+const toolUseBlocks = response.content.filter(
+  (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
+);
+
+if (toolUseBlocks.length > 0) {
+  // Execute all tools and collect results
+  const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+  for (const block of toolUseBlocks) {
+    const result = await executeTool(block.name, block.input);
+    toolResults.push({
+      type: 'tool_result',
+      tool_use_id: block.id,
+      content: result,
+    });
+  }
+
+  // Add assistant message once with ALL original content
+  messages.push({ role: 'assistant', content: response.content });
+  // Add single user message with ALL tool results
+  messages.push({ role: 'user', content: toolResults });
+}
+```
+
+**Why this matters:** Claude may call multiple tools in parallel (e.g., 4 search queries at once). The API requires that each `tool_use` in the assistant message has a matching `tool_result` in the immediately following user message.
+
+> **Note:** The Claude Agent SDK handles this automatically. This issue only occurs when implementing your own tool loop with the standard `@anthropic-ai/sdk`.
+
+---
 
 ### Error Handling
 
