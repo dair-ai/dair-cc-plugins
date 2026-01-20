@@ -572,7 +572,7 @@ for await (const message of query({
 import { exaSearchTools } from "./tools";
 
 export const researchAgentConfig = {
-  model: "claude-sonnet-4-5",
+  model: "claude-haiku-4-5-20251001",  // Haiku is fast and cost-effective
   systemPrompt: `You are a research assistant with access to Exa search.
     Use neural search for semantic queries and get_contents to read full articles.
     Always cite sources with URLs.`,
@@ -893,6 +893,187 @@ if (toolUseBlocks.length > 0) {
 
 ---
 
+### ⚠️ Agent SDK Message Structure (Critical)
+
+When processing messages from the Agent SDK's `query()` function, **tool results do NOT come in `assistant` type messages**. This is a common mistake that causes subagents to return 0 results.
+
+**Tool results come in `user` type messages:**
+
+```typescript
+// ❌ WRONG - Looking for tool results in assistant messages
+if (message.type === 'assistant') {
+  // Tool results are NOT here!
+}
+
+// ✅ CORRECT - Tool results come in user messages
+if (message.type === 'user') {
+  const msg = message as any;
+  if (msg.message?.content) {
+    for (const block of msg.message.content) {
+      if (block.type === 'tool_result') {
+        // Tool results are HERE!
+        const contentArray = Array.isArray(block.content)
+          ? block.content
+          : typeof block.content === 'string'
+            ? [{ type: 'text', text: block.content }]
+            : [];
+
+        for (const item of contentArray) {
+          if (item.type === 'text' && item.text) {
+            const parsed = JSON.parse(item.text);
+            // Process parsed results...
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**Message structure from Agent SDK:**
+```json
+{
+  "type": "user",
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_xxx",
+        "content": [
+          {
+            "type": "text",
+            "text": "[{\"title\": \"...\", \"url\": \"...\"}]"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### ⚠️ Custom Tool Return Format (Critical)
+
+When creating custom tools with `tool()` and `createSdkMcpServer()`, your tools return **raw arrays**, not objects with a `results` key. Your parsing code must handle this.
+
+**Example tool returning raw array:**
+```typescript
+// In tools.ts - tool returns a raw array
+const searchTool = tool(
+  'search',
+  'Search the web',
+  { query: z.string() },
+  async (args) => {
+    const results = await exa.search(args.query);
+
+    // Returns raw array, NOT { results: [...] }
+    const formattedResults = results.results.map((r) => ({
+      title: r.title,
+      url: r.url,
+      snippet: r.text || '',
+    }));
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(formattedResults, null, 2),  // Raw array!
+      }],
+    };
+  }
+);
+```
+
+**Parsing code must handle raw arrays:**
+```typescript
+// ❌ WRONG - Only checking for object with results key
+if (parsed.results && Array.isArray(parsed.results)) {
+  // Won't work with raw arrays!
+}
+
+// ✅ CORRECT - Handle raw array format first
+if (Array.isArray(parsed)) {
+  for (const result of parsed) {
+    if (result.title && result.url) {
+      // Process each result...
+      allResults.push({
+        title: result.title,
+        url: result.url,
+        snippet: result.snippet || result.content?.slice(0, 200),
+        content: result.content,
+      });
+    }
+  }
+}
+
+// Also handle object format (for compatibility)
+if (parsed.results && Array.isArray(parsed.results)) {
+  for (const result of parsed.results) {
+    // Process...
+  }
+}
+```
+
+**Complete example for parsing tool results in a subagent:**
+```typescript
+// lib/agent/subagents.ts
+export async function runWebSearchAgent(
+  plan: SearchPlan,
+  onSource: (source: Source) => void
+): Promise<SearchResult[]> {
+  const allResults: SearchResult[] = [];
+
+  for await (const message of query({
+    prompt: `Execute searches: ${JSON.stringify(plan.queries)}`,
+    options: {
+      model: 'claude-haiku-4-5-20251001',
+      mcpServers: { 'exa-search': exaSearchTools },
+      allowedTools: ['mcp__exa-search__search', 'mcp__exa-search__get_contents'],
+      permissionMode: 'bypassPermissions',
+    },
+  })) {
+    // ✅ Check for user messages containing tool_result blocks
+    if (message.type === 'user') {
+      const msg = message as any;
+      if (msg.message?.content) {
+        for (const block of msg.message.content) {
+          if (block.type === 'tool_result') {
+            const contentArray = Array.isArray(block.content)
+              ? block.content
+              : typeof block.content === 'string'
+                ? [{ type: 'text', text: block.content }]
+                : [];
+
+            for (const item of contentArray) {
+              if (item.type === 'text' && item.text) {
+                try {
+                  const parsed = JSON.parse(item.text);
+
+                  // ✅ Handle raw array format (from custom tools)
+                  if (Array.isArray(parsed)) {
+                    for (const result of parsed) {
+                      if (result.title && result.url) {
+                        onSource({ title: result.title, url: result.url, snippet: result.snippet });
+                        allResults.push(result);
+                      }
+                    }
+                  }
+                } catch (e) {
+                  // JSON parse error - skip
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return allResults;
+}
+```
+
+---
+
 ### Error Handling
 
 ```typescript
@@ -921,15 +1102,24 @@ try {
 ### Model Selection
 
 ```typescript
-// claude-sonnet-4-5: Balanced performance and cost (recommended for most tasks)
+// claude-haiku-4-5-20251001: Fast and cost-effective (RECOMMENDED for most agent tasks)
+options: { model: "claude-haiku-4-5-20251001" }
+
+// claude-sonnet-4-5: Balanced performance and cost (for complex orchestration)
 options: { model: "claude-sonnet-4-5" }
 
-// claude-opus-4-5: Complex reasoning and analysis
+// claude-opus-4-5: Complex reasoning and analysis (rarely needed)
 options: { model: "claude-opus-4-5" }
-
-// claude-haiku-4-5: Fast and cost-effective (good for subagents)
-options: { model: "claude-haiku-4-5-20251001" }
 ```
+
+**Recommended model strategy for multi-agent systems:**
+| Agent Type | Recommended Model | Why |
+|------------|-------------------|-----|
+| Planner Subagent | `claude-haiku-4-5-20251001` | Planning is structured, haiku handles well |
+| Web Search Subagent | `claude-haiku-4-5-20251001` | Tool execution doesn't need complex reasoning |
+| Report Writer Subagent | `claude-haiku-4-5-20251001` | Fast generation with good quality |
+| Main Orchestrator | `claude-haiku-4-5-20251001` | Coordination is simple, haiku is sufficient |
+| Complex Analysis | `claude-sonnet-4-5` | Only when deep reasoning is required |
 
 ---
 
